@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  GenAI-Powered Customer Support Copilot — Root Stack.
+  Nested: VpcStack, DataStack, AuthStack, EcsStack, BedrockStack, MonitoringStack.
+
+Parameters:
+  ClientName:
+    Type: String
+    Default: cust03
+    Description: Client prefix for all resource names
+
+Resources:
+  VpcStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: vpc.yaml
+      Parameters:
+        ClientName: !Ref ClientName
+      Tags:
+        - Key: Project
+          Value: !Sub ${ClientName}-copilot
+
+  DataStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: data.yaml
+      Parameters:
+        ClientName: !Ref ClientName
+      Tags:
+        - Key: Project
+          Value: !Sub ${ClientName}-copilot
+
+  AuthStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: auth.yaml
+      Parameters:
+        ClientName: !Ref ClientName
+      Tags:
+        - Key: Project
+          Value: !Sub ${ClientName}-copilot
+
+  EcsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ecs.yaml
+      Parameters:
+        ClientName: !Ref ClientName
+      Tags:
+        - Key: Project
+          Value: !Sub ${ClientName}-copilot
+
+  BedrockStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: bedrock.yaml
+      Parameters:
+        ClientName: !Ref ClientName
+      Tags:
+        - Key: Project
+          Value: !Sub ${ClientName}-copilot
+
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: monitoring.yaml
+      Parameters:
+        ClientName: !Ref ClientName
+        EcsClusterName: !GetAtt EcsStack.Outputs.ClusterName
+      Tags:
+        - Key: Project
+          Value: !Sub ${ClientName}-copilot
+
+Outputs:
+  VpcId:
+    Value: !GetAtt VpcStack.Outputs.VpcId
+  CognitoUserPoolId:
+    Value: !GetAtt AuthStack.Outputs.UserPoolId
+  EcsCluster:
+    Value: !GetAtt EcsStack.Outputs.ClusterName
+  GuardrailId:
+    Value: !GetAtt BedrockStack.Outputs.GuardrailId
+  DashboardUrl:
+    Value: !GetAtt MonitoringStack.Outputs.DashboardUrl

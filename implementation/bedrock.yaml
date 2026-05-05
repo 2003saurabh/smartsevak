@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: BedrockStack — Bedrock Guardrail (PII, content, denied topics)
+
+Parameters:
+  ClientName:
+    Type: String
+
+Resources:
+  CopilotGuardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: !Sub ${ClientName}-copilot-guardrail
+      Description: PII redaction, content filtering, denied topics for copilot
+      BlockedInputMessaging: Your query was blocked by safety controls.
+      BlockedOutputsMessaging: The response was blocked by safety controls.
+      ContentPolicyConfig:
+        FiltersConfig:
+          - {Type: HATE, InputStrength: HIGH, OutputStrength: HIGH}
+          - {Type: VIOLENCE, InputStrength: MEDIUM, OutputStrength: MEDIUM}
+          - {Type: SEXUAL, InputStrength: HIGH, OutputStrength: HIGH}
+          - {Type: MISCONDUCT, InputStrength: HIGH, OutputStrength: HIGH}
+      SensitiveInformationPolicyConfig:
+        PiiEntitiesConfig:
+          - {Type: EMAIL, Action: ANONYMIZE}
+          - {Type: PHONE, Action: ANONYMIZE}
+          - {Type: CREDIT_DEBIT_CARD_NUMBER, Action: ANONYMIZE}
+          - {Type: NAME, Action: ANONYMIZE}
+          - {Type: US_SOCIAL_SECURITY_NUMBER, Action: ANONYMIZE}
+      TopicPolicyConfig:
+        TopicsConfig:
+          - {Name: CompetitorComparisons, Definition: Queries comparing with competitor products, Type: DENY}
+          - {Name: LegalAdvice, Definition: Queries requesting legal advice, Type: DENY}
+          - {Name: PricingNegotiations, Definition: Queries negotiating pricing, Type: DENY}
+          - {Name: PersonalOpinions, Definition: Queries asking for personal opinions, Type: DENY}
+      WordPolicyConfig:
+        ManagedWordListsConfig:
+          - {Type: PROFANITY}
+      Tags:
+        - {Key: Project, Value: !Sub '${ClientName}-copilot'}
+
+Outputs:
+  GuardrailId:
+    Value: !GetAtt CopilotGuardrail.GuardrailId
+  GuardrailArn:
+    Value: !GetAtt CopilotGuardrail.GuardrailArn

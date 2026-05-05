@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DataStack — KMS CMKs (7), DynamoDB (3 tables), S3 (knowledge-base), ECR
+
+Parameters:
+  ClientName:
+    Type: String
+
+Resources:
+  # ── KMS Keys ──
+  S3Key:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub ${ClientName} S3 knowledge-base encryption
+      EnableKeyRotation: true
+      KeyPolicy: {Version: '2012-10-17', Statement: [{Sid: Root, Effect: Allow, Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}, Action: 'kms:*', Resource: '*'}]}
+  S3KeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: {AliasName: !Sub 'alias/${ClientName}-s3-key', TargetKeyId: !Ref S3Key}
+
+  DdbKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub ${ClientName} DynamoDB encryption
+      EnableKeyRotation: true
+      KeyPolicy: {Version: '2012-10-17', Statement: [{Sid: Root, Effect: Allow, Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}, Action: 'kms:*', Resource: '*'}]}
+  DdbKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: {AliasName: !Sub 'alias/${ClientName}-ddb-key', TargetKeyId: !Ref DdbKey}
+
+  AossKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub ${ClientName} OpenSearch Serverless encryption
+      EnableKeyRotation: true
+      KeyPolicy: {Version: '2012-10-17', Statement: [{Sid: Root, Effect: Allow, Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}, Action: 'kms:*', Resource: '*'}]}
+  AossKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: {AliasName: !Sub 'alias/${ClientName}-aoss-key', TargetKeyId: !Ref AossKey}
+
+  LogsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub ${ClientName} CloudWatch Logs encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - {Sid: Root, Effect: Allow, Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}, Action: 'kms:*', Resource: '*'}
+          - Sid: AllowCWLogs
+            Effect: Allow
+            Principal: {Service: !Sub 'logs.${AWS::Region}.amazonaws.com'}
+            Action: [kms:Encrypt*, kms:Decrypt*, kms:ReEncrypt*, kms:GenerateDataKey*, kms:Describe*]
+            Resource: '*'
+  LogsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: {AliasName: !Sub 'alias/${ClientName}-logs-key', TargetKeyId: !Ref LogsKey}
+
+  EcrKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub ${ClientName} ECR encryption
+      EnableKeyRotation: true
+      KeyPolicy: {Version: '2012-10-17', Statement: [{Sid: Root, Effect: Allow, Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}, Action: 'kms:*', Resource: '*'}]}
+  EcrKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: {AliasName: !Sub 'alias/${ClientName}-ecr-key', TargetKeyId: !Ref EcrKey}
+
+  SecretsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub ${ClientName} Secrets Manager encryption
+      EnableKeyRotation: true
+      KeyPolicy: {Version: '2012-10-17', Statement: [{Sid: Root, Effect: Allow, Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}, Action: 'kms:*', Resource: '*'}]}
+  SecretsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: {AliasName: !Sub 'alias/${ClientName}-secrets-key', TargetKeyId: !Ref SecretsKey}
+
+  TrailKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub ${ClientName} CloudTrail encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - {Sid: Root, Effect: Allow, Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}, Action: 'kms:*', Resource: '*'}
+          - {Sid: AllowCT, Effect: Allow, Principal: {Service: cloudtrail.amazonaws.com}, Action: kms:GenerateDataKey*, Resource: '*'}
+  TrailKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: {AliasName: !Sub 'alias/${ClientName}-trail-key', TargetKeyId: !Ref TrailKey}
+
+  # ── DynamoDB Tables ──
+  TenantConfigTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${ClientName}-tenant-config
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: !GetAtt DdbKey.Arn}
+      AttributeDefinitions: [{AttributeName: tenant_id, AttributeType: S}]
+      KeySchema: [{AttributeName: tenant_id, KeyType: HASH}]
+
+  InteractionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${ClientName}-interaction-history
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: !GetAtt DdbKey.Arn}
+      AttributeDefinitions:
+        - {AttributeName: tenant_id, AttributeType: S}
+        - {AttributeName: interaction_id, AttributeType: S}
+      KeySchema:
+        - {AttributeName: tenant_id, KeyType: HASH}
+        - {AttributeName: interaction_id, KeyType: RANGE}
+
+  FeedbackTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${ClientName}-feedback-log
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: !GetAtt DdbKey.Arn}
+      AttributeDefinitions:
+        - {AttributeName: tenant_id, AttributeType: S}
+        - {AttributeName: feedback_id, AttributeType: S}
+      KeySchema:
+        - {AttributeName: tenant_id, KeyType: HASH}
+        - {AttributeName: feedback_id, KeyType: RANGE}
+
+  # ── S3 Knowledge Base ──
+  KnowledgeBaseBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${ClientName}-knowledge-base-${AWS::AccountId}
+      VersioningConfiguration: {Status: Enabled}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: 'aws:kms', KMSMasterKeyID: !GetAtt S3Key.Arn}
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── ECR ──
+  EcrRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${ClientName}-copilot
+      EncryptionConfiguration: {EncryptionType: KMS, KmsKey: !GetAtt EcrKey.Arn}
+      ImageScanningConfiguration: {ScanOnPush: true}
+
+Outputs:
+  TrailKeyArn:
+    Value: !GetAtt TrailKey.Arn
+  LogsKeyArn:
+    Value: !GetAtt LogsKey.Arn
+  KnowledgeBaseBucket:
+    Value: !Ref KnowledgeBaseBucket

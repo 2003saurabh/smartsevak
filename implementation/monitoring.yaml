@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MonitoringStack — CloudWatch log groups, dashboard, alarms
+
+Parameters:
+  ClientName:
+    Type: String
+  EcsClusterName:
+    Type: String
+
+Resources:
+  # ── Log Groups (4) ──
+  EcsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ClientName}-copilot-svc
+      RetentionInDays: 90
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ClientName}-ingest-fn
+      RetentionInDays: 90
+  BedrockLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/bedrock/${ClientName}-invocations
+      RetentionInDays: 90
+  ApiGwLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${ClientName}-copilot-api
+      RetentionInDays: 90
+
+  # ── Alarms ──
+  EcsCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ClientName}-ecs-cpu-high
+      AlarmDescription: ECS Fargate avg CPU > 85% for 15 min
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - {Name: ClusterName, Value: !Ref EcsClusterName}
+        - {Name: ServiceName, Value: copilot-svc}
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  Alb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ClientName}-alb-5xx-high
+      AlarmDescription: ALB 5xx error rate > 3%
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_ELB_5XX_Count
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  BedrockThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ClientName}-bedrock-throttle
+      AlarmDescription: Bedrock throttle events > 3 in 5 min
+      Namespace: AWS/Bedrock
+      MetricName: InvocationThrottles
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # ── Dashboard ──
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub ${ClientName}-copilot-dashboard
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "ECS CPU Utilization",
+                "metrics": [["AWS/ECS","CPUUtilization","ClusterName","${EcsClusterName}","ServiceName","copilot-svc"]],
+                "period": 300, "stat": "Average", "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "ECS Memory Utilization",
+                "metrics": [["AWS/ECS","MemoryUtilization","ClusterName","${EcsClusterName}","ServiceName","copilot-svc"]],
+                "period": 300, "stat": "Average", "region": "${AWS::Region}"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  DashboardUrl:
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ClientName}-copilot-dashboard

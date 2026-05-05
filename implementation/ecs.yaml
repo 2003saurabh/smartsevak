@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EcsStack — ECS Cluster, Fargate task definition, IAM roles (no running tasks, no ALB)
+
+Parameters:
+  ClientName:
+    Type: String
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${ClientName}-copilot
+      ClusterSettings:
+        - {Name: containerInsights, Value: enabled}
+      Tags:
+        - {Key: Project, Value: !Sub '${ClientName}-copilot'}
+
+  # ── IAM: ECS Execution Role ──
+  EcsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ClientName}-ecs-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: ecs-tasks.amazonaws.com}, Action: 'sts:AssumeRole'}
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ── IAM: ecs-copilot-task-role ──
+  CopilotTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ClientName}-ecs-copilot-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: ecs-tasks.amazonaws.com}, Action: 'sts:AssumeRole'}
+      Policies:
+        - PolicyName: CopilotPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource:
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+              - Effect: Allow
+                Action: bedrock:ApplyGuardrail
+                Resource: '*'
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:Query]
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ClientName}-*
+
+  # ── IAM: lambda-ingest-role ──
+  LambdaIngestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ClientName}-lambda-ingest-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: 'sts:AssumeRole'}
+      Policies:
+        - PolicyName: IngestPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+
+  # ── IAM: github-deploy-role ──
+  GithubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ClientName}-github-deploy-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}
+            Action: 'sts:AssumeRole'
+
+  # ── Task Definition (registered only, not running = $0) ──
+  TaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ClientName}-copilot-svc
+      Cpu: '1024'
+      Memory: '2048'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt EcsExecutionRole.Arn
+      TaskRoleArn: !GetAtt CopilotTaskRole.Arn
+      ContainerDefinitions:
+        - Name: copilot-svc
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ClientName}-copilot:latest
+          Essential: true
+          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
+          Environment:
+            - {Name: PRIMARY_MODEL_ID, Value: anthropic.claude-sonnet-4-20250514-v1:0}
+            - {Name: FALLBACK_MODEL_ID, Value: amazon.nova-pro-v1:0}
+            - {Name: EMBEDDING_MODEL_ID, Value: amazon.titan-embed-text-v2:0}
+      Tags:
+        - {Key: Project, Value: !Sub '${ClientName}-copilot'}
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  TaskDefArn:
+    Value: !Ref TaskDef

@@ -1,0 +1,9 @@
+# ═══════════════════════════════════════════════════════════════
+#  Change ClientName — it flows into ALL resource names
+# ═══════════════════════════════════════════════════════════════
+ClientName: cust03
+Region: ap-south-1
+
+# S3 bucket for uploading nested CloudFormation templates
+# (created automatically if it doesn't exist)
+CfnBucket: cust03-cfn-artifacts

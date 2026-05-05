@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VpcStack — VPC, 4 subnets (2 AZ), IGW, route tables, NACLs, 8 Security Groups, S3 endpoint
+
+Parameters:
+  ClientName:
+    Type: String
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.1.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-copilot-vpc'}]
+
+  Igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-copilot-igw'}]
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: {VpcId: !Ref Vpc, InternetGatewayId: !Ref Igw}
+
+  # ── Subnets ──
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.1.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-copilot-public-a'}]
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.1.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-copilot-public-b'}]
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.1.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-copilot-private-a'}]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.1.20.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-copilot-private-b'}]
+
+  # ── Route Tables ──
+  PublicRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-copilot-public-rt'}]
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties: {RouteTableId: !Ref PublicRT, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref Igw}
+  PubRtAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PublicSubnetA, RouteTableId: !Ref PublicRT}
+  PubRtAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PublicSubnetB, RouteTableId: !Ref PublicRT}
+  PrivateRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-copilot-private-rt'}]
+  PrivRtAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRT}
+  PrivRtAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRT}
+
+  # ── NACL (nacl-private) ──
+  PrivateNacl:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-nacl-private'}]
+  NaclInHttps:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties: {NetworkAclId: !Ref PrivateNacl, RuleNumber: 100, Protocol: 6, RuleAction: allow, CidrBlock: 10.1.0.0/16, PortRange: {From: 443, To: 443}}
+  NaclInEph:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties: {NetworkAclId: !Ref PrivateNacl, RuleNumber: 200, Protocol: 6, RuleAction: allow, CidrBlock: 10.1.0.0/16, PortRange: {From: 1024, To: 65535}}
+  NaclOutHttps:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties: {NetworkAclId: !Ref PrivateNacl, RuleNumber: 100, Protocol: 6, Egress: true, RuleAction: allow, CidrBlock: 10.1.0.0/16, PortRange: {From: 443, To: 443}}
+  NaclOutEph:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties: {NetworkAclId: !Ref PrivateNacl, RuleNumber: 200, Protocol: 6, Egress: true, RuleAction: allow, CidrBlock: 10.1.0.0/16, PortRange: {From: 1024, To: 65535}}
+  NaclAssocA:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties: {SubnetId: !Ref PrivateSubnetA, NetworkAclId: !Ref PrivateNacl}
+  NaclAssocB:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties: {SubnetId: !Ref PrivateSubnetB, NetworkAclId: !Ref PrivateNacl}
+
+  # ── Security Groups (8) ──
+  SgAlb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - HTTPS from internet
+      GroupName: !Sub ${ClientName}-sg-alb
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0}
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-sg-alb'}]
+  SgCopilotSvc:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS Fargate copilot-svc
+      GroupName: !Sub ${ClientName}-sg-copilot-svc
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 8080, ToPort: 8080, SourceSecurityGroupId: !Ref SgAlb}
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-sg-copilot-svc'}]
+  SgIngestFn:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lambda ingest-fn
+      GroupName: !Sub ${ClientName}-sg-ingest-fn
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-sg-ingest-fn'}]
+  SgVpceBedrock:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Bedrock VPC Endpoint
+      GroupName: !Sub ${ClientName}-sg-vpce-bedrock
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgCopilotSvc}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgIngestFn}
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-sg-vpce-bedrock'}]
+  SgVpceAoss:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: OpenSearch Serverless Endpoint
+      GroupName: !Sub ${ClientName}-sg-vpce-aoss
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgCopilotSvc}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgIngestFn}
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-sg-vpce-aoss'}]
+  SgVpceDdb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DynamoDB VPC Endpoint
+      GroupName: !Sub ${ClientName}-sg-vpce-ddb
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgCopilotSvc}
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-sg-vpce-ddb'}]
+  SgVpceCw:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: CloudWatch Logs Endpoint
+      GroupName: !Sub ${ClientName}-sg-vpce-cw
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgCopilotSvc}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgIngestFn}
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-sg-vpce-cw'}]
+  SgVpceSts:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: STS VPC Endpoint
+      GroupName: !Sub ${ClientName}-sg-vpce-sts
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgCopilotSvc}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgIngestFn}
+      Tags: [{Key: Name, Value: !Sub '${ClientName}-sg-vpce-sts'}]
+
+  # ── S3 Gateway Endpoint (free) ──
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRT]
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  PublicSubnetA:
+    Value: !Ref PublicSubnetA
+  PublicSubnetB:
+    Value: !Ref PublicSubnetB
+  PrivateSubnetA:
+    Value: !Ref PrivateSubnetA
+  PrivateSubnetB:
+    Value: !Ref PrivateSubnetB
+  SgAlbId:
+    Value: !Ref SgAlb
